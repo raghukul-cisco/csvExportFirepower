@@ -31,10 +31,11 @@ Below mentioned are the steps to follow in order to execute it:
 
 In order to execute the script, run the below command:
 
-# python3 policyCSV.py 
-Enter the IP Address of the FMC: 
-Enter the username for the FMC: 
-Enter the password associated with the username entered: 
+	python3 policyCSV.py 
+		Enter the IP Address of the FMC: 
+		Enter the username for the FMC: 
+		Enter the password associated with the username entered: 
+
 Once the credentials are entered, the script connects to the FMC and provides the list of Access Control Policy that are available in Global Domain.
 
 Example:
