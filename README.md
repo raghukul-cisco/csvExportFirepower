@@ -9,10 +9,15 @@ The tool is developed to address the concern of taking a CSV backup of access co
 
 ## Installation
 
-In order to install the tool, below requirements must be satisfied.
- 1. Python version 3.X and above.
- 2. Import the fireRest library from https://developer.cisco.com/codeexchange/github/repo/kaisero/fireREST/
- 3. Once the fireRest library is installed, the code is good to be executed.
+Requirements for installation:
+
+	1. pip3 install fireREST
+	2. pip3 install netaddr
+	3. pip3 install datetime
+	4. pip3 install ipaddress
+
+Or alternatively you can the command below to download dependencies via the requirements.txt file, this has to be executed from the downloaded script directory.
+	pip3 install -r ./requirements.txt
 
 
 ## Usage
@@ -30,7 +35,6 @@ In order to execute the script, run the below command:
 Enter the IP Address of the FMC: 
 Enter the username for the FMC: 
 Enter the password associated with the username entered: 
-
 Once the credentials are entered, the script connects to the FMC and provides the list of Access Control Policy that are available in Global Domain.
 
 Example:
@@ -82,6 +86,14 @@ Additionally, support for multi-domains is not available yet.
 ## Getting help
 
 If you have questions, concerns, bug reports, etc., please create an issue against this repository.
+
+DevNet Learning Lab
+Please go to the DevNet Learning Lab for Firepower Management Center (FMC) to learn how to use these scripts:
+https://developer.cisco.com/learning/modules/fmc-api
+
+DevNet Sandbox
+The Sandbox which can implement this script is at: https://devnetsandbox.cisco.com/RM/Diagram/Index/1228cb22-b2ba-48d3-a70a-86a53f4eecc0?diagramType=Topology
+
 
 ## Roadmap
 
