@@ -2,56 +2,109 @@
 
 This tool helps in taking CSV export of policies on firepower. A CSV backup of policies is usually a requirement as part of audit/compliance. However, this is not an official backup and restore option. The utility is designed to just take CSV export.
 
-![add-image-here]()
  
 ## Use Case Description
 
-Describe the problem this code addresses, how your code solves the problem, challenges you had to overcome as part of the solution, and optional ideas you have in mind that could further extend your solution.
+The tool is developed to address the concern of taking a CSV backup of access control policies configured on the FMC. The FMC by design supports SFO, PDF and full backup as option to take export. However, many a times there is a need to take CSV export of the policies configured on the FMC. In the current version of the tool the support is available for single domain deployments with access control policy. More details are availabe in the usage section.
 
 ## Installation
 
-Detailed instructions on how to install, configure, and get the project running. Call out any dependencies. This should be frequently tested and updated to make sure it works reliably, accounts for updated versions of dependencies, etc.
+Requirements for installation:
 
-## Configuration
+	1. pip3 install fireREST
+	2. pip3 install netaddr
+	3. pip3 install datetime
+	4. pip3 install ipaddress
 
-If the code is configurable, describe it in detail, either here or in other documentation that you reference.
+Or alternatively you can the command below to download dependencies via the requirements.txt file, this has to be executed from the downloaded script directory.
+	pip3 install -r ./requirements.txt
+
 
 ## Usage
 
-Show users how to use the code. Be specific.
-Use appropriate formatting when showing code snippets or command line output.
+Once the dependencies are installed and the code is pulled from GitHub, it is good to go.
+Below mentioned are the steps to follow in order to execute it:
 
-### DevNet Sandbox
+ 1. First thing to ensure is, the machine where the code will be installed should have connectivity with the FMC under concern.
+ 2. It is recommended to create a different user for the tool, so that it does not block existing users from logging into the FMC for operational changes.
+ 3. Navigate to the location where the script is installed.
 
-A great way to make your repo easy for others to use is to provide a link to a [DevNet Sandbox](https://developer.cisco.com/site/sandbox/) that provides a network or other resources required to use this code. In addition to identifying an appropriate sandbox, be sure to provide instructions and any configuration necessary to run your code with the sandbox.
+In order to execute the script, run the below command:
 
-## How to test the software
+	python3 policyCSV.py 
+		Enter the IP Address of the FMC: 
+		Enter the username for the FMC: 
+		Enter the password associated with the username entered: 
 
-Provide details on steps to test, versions of components/dependencies against which code was tested, date the code was last tested, etc. 
-If the repo includes automated tests, detail how to run those tests.
-If the repo is instrumented with a continuous testing framework, that is even better.
+Once the credentials are entered, the script connects to the FMC and provides the list of Access Control Policy that are available in Global Domain.
+
+Example:
+
+ACP available in global domain: 
+	Name:  Default
+	Name:  Snort3
+
+Now, the policies listed are case sensitive. Hence, while choosing the ACP which has to be exported the user can enter one of three possibilities:
+
+ 1. Name of a single ACP (case sensitive) and press return.
+ 2. Comma seperated ACP names in case multiple ACP have to exported and press return. (All the ACP names should be case sensitive)
+ 3. Default behavior with just return pressed. (All the ACP available/listed would exported)
+
+Once the user choice is entered, the script executes and you will see output as shown below:
+
+Enter the ACP Name (case sensitive) if you want specific ACP to export(multiple values should be comma seperated). By default all the ACP would be exported, press return for default behaviour: Default
+Inside ACP
+Writing rule #1 to CSV...
+Writing rule #2 to CSV...
+Writing rule #3 to CSV...
+Writing rule #4 to CSV...
+Writing rule #5 to CSV...
+Writing rule #6 to CSV...
+Writing rule #7 to CSV...
+Writing rule #8 to CSV...
+Writing rule #9 to CSV...
+Writing rule #10 to CSV...
+Writing rule #11 to CSV...
+File is at: ./E00EDAC5-CFAC-0ed3-0000-253403070825.csv
+
+Output Generated:
+
+ 1. The CSV generated is located in the same folder as that of script installation.
+ 2. The name of the CSV file generated is UUID of the ACP to ensure uniqueness.
+ 3. In case of multiple ACP being entered or default behavior, the export of ACP is in sequential order similar to policies listed after we enter the credentials for the script.
+ 4. The output on console also displays the rule number that is being exported to help determine progress and troubleshoot in case of problems.
 
 
 ## Known issues
 
-Document any significant shortcomings with the code. If using [GitHub Issues](https://help.github.com/en/articles/about-issues) to track issues, make that known and provide any templates or conventions to be followed when opening a new issue. 
+Currently the tool is limited to export of ACP in CSV format.
+The below fields from ACP are not supported currently:
+ 1. Username/UserGroups
+ 2. Security Group Tags (Source and Destination)
+
+Additionally, support for multi-domains is not available yet.
 
 ## Getting help
 
-Instruct users how to get help with this code; this might include links to an issues list, wiki, mailing list, etc.
-
-**Example**
-
 If you have questions, concerns, bug reports, etc., please create an issue against this repository.
 
-## Getting involved
+DevNet Learning Lab
+Please go to the DevNet Learning Lab for Firepower Management Center (FMC) to learn how to use these scripts:
+https://developer.cisco.com/learning/modules/fmc-api
 
-This section should detail why people should get involved and describe key areas you are currently focusing on; e.g., trying to get feedback on features, fixing certain bugs, building important pieces, etc. Include information on how to setup a development environment if different from general installation instructions.
+DevNet Sandbox
+The Sandbox which can implement this script is at: https://devnetsandbox.cisco.com/RM/Diagram/Index/1228cb22-b2ba-48d3-a70a-86a53f4eecc0?diagramType=Topology
 
-General instructions on _how_ to contribute should be stated with a link to [CONTRIBUTING](./CONTRIBUTING.md) file.
+
+## Roadmap
+
+The next version of the tool/utility will have the following items included:
+ 1. Support for User,Groups and Security Group Tags
+ 2. Inline expansion of Network objects (source and destination)
+ 3. Support for exporting NAT policies as CSV
 
 ## Author(s)
 
 This project was written and is maintained by the following individuals:
 
-* raghukul@cisco.com <raghukul@cisco.com>
+* Raghunath Kulkarni <raghukul@cisco.com>
