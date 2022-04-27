@@ -104,18 +104,28 @@ def acpCSV(fmc, selection):
 			try:
 				temp = ele['sourceNetworks']
 				for key, value in temp.items():
-					for local in value:
-						sNetwork.append(local['name'])
+					if ('literals' in key):
+						for local in value:
+							sNetwork.append(local['value'])
+					if ('objects' in key):
+						for local in value:
+							sNetwork.append(local['name'])
 			except KeyError:
 				sNetwork.append("Any")
 
 			try:
 				temp = ele['destinationNetworks']
 				for key, value in temp.items():
-					for local in value:
-						dNetwork.append(local['name'])
+					if ('literals' in key):
+						for local in value:
+							dNetwork.append(local['value'])
+					if ('objects' in key):
+						for local in value:
+							dNetwork.append(local['name'])
 			except KeyError:
 				dNetwork.append("Any")	
+
+			print (ele['name'], sNetwork, dNetwork)
 
 			#Port Extraction
 			sPort = []
