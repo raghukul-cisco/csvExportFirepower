@@ -274,18 +274,3 @@ curl -k -X POST https://<FMC-IP>/api/fmc_platform/v1/auth/generatetoken \
 - SSL verification disabled for lab environments (modify for production)
 - Credentials are never logged or written to disk
 
-## Integration with NG-FMT Project
-
-This tool complements the NG-FMT ASA-to-FMC migration workflow:
-
-1. **NG-FMT**: Cisco ASA → JSON → Terraform (network objects)
-2. **fmc_get_config.py**: FMC → CSV (access control policies)
-
-Combined workflow:
-- Use NG-FMT to migrate ASA network objects to FMC
-- Use this script to export FMC policies for documentation/backup
-- Compare ASA ACLs with FMC policies for migration validation
-
-## License
-
-Part of the NG-FMT (Next-Generation Firewall Migration Tool) project.
