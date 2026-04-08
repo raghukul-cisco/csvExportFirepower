@@ -44,6 +44,8 @@ class FMCAuthenticator:
         self.auth_token = None
         self.refresh_token = None
         self.available_domains = []
+        self._token_time = None  # Track when token was obtained
+        self._token_lifetime = 1680  # Refresh proactively at 28 min (FMC tokens last 30 min)
         
     def authenticate(self) -> bool:
         """
@@ -69,6 +71,7 @@ class FMCAuthenticator:
                 self.auth_token = response.headers.get('X-auth-access-token')
                 self.refresh_token = response.headers.get('X-auth-refresh-token')
                 self.domain_uuid = response.headers.get('DOMAIN_UUID')
+                self._token_time = time.time()
                 
                 # Update headers with authentication token
                 self.headers['X-auth-access-token'] = self.auth_token
@@ -127,6 +130,62 @@ class FMCAuthenticator:
         self.domain_uuid = domain_uuid
         print(f"[✓] Selected domain UUID: {domain_uuid}")
     
+    def is_token_expired(self) -> bool:
+        """Check if the auth token is close to expiry (proactive refresh)"""
+        if self._token_time is None:
+            return True
+        return (time.time() - self._token_time) >= self._token_lifetime
+
+    def refresh_auth_token(self) -> bool:
+        """
+        Refresh the auth token using the refresh token.
+        Falls back to full re-authentication if refresh fails.
+        
+        Returns:
+            bool: True if token was refreshed successfully
+        """
+        refresh_url = f"https://{self.fmc_host}/api/fmc_platform/v1/auth/refreshtoken"
+        refresh_headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'X-auth-access-token': self.auth_token,
+            'X-auth-refresh-token': self.refresh_token
+        }
+        
+        try:
+            print(f"\n[*] Refreshing authentication token...")
+            response = requests.post(
+                refresh_url,
+                headers=refresh_headers,
+                verify=False,
+                timeout=30
+            )
+            
+            if response.status_code == 204:
+                self.auth_token = response.headers.get('X-auth-access-token')
+                self.refresh_token = response.headers.get('X-auth-refresh-token')
+                self._token_time = time.time()
+                self.headers['X-auth-access-token'] = self.auth_token
+                print(f"[✓] Token refreshed successfully")
+                return True
+            else:
+                print(f"[!] Token refresh failed ({response.status_code}), re-authenticating...")
+                return self.authenticate()
+        except requests.exceptions.RequestException as e:
+            print(f"[!] Token refresh error: {e}, re-authenticating...")
+            return self.authenticate()
+
+    def ensure_valid_token(self) -> bool:
+        """
+        Ensure the auth token is still valid, refreshing proactively if needed.
+        
+        Returns:
+            bool: True if a valid token is available
+        """
+        if self.is_token_expired():
+            return self.refresh_auth_token()
+        return True
+
     def get_headers(self) -> Dict[str, str]:
         """Return headers with authentication token"""
         return self.headers.copy()
@@ -159,7 +218,9 @@ class FMCPolicyExtractor:
         
     def _make_request(self, endpoint: str, params: Optional[Dict] = None) -> Optional[Dict]:
         """
-        Make authenticated API request to FMC
+        Make authenticated API request to FMC.
+        Automatically refreshes the auth token if it is near expiry or if
+        a 401 Unauthorized response is received.
         
         Args:
             endpoint: API endpoint path
@@ -168,6 +229,9 @@ class FMCPolicyExtractor:
         Returns:
             Response JSON or None if error
         """
+        # Proactively refresh the token before it expires
+        self.auth.ensure_valid_token()
+        
         url = f"{self.base_url}/domain/{self.auth.domain_uuid}/{endpoint}"
         
         try:
@@ -181,6 +245,25 @@ class FMCPolicyExtractor:
             
             if response.status_code == 200:
                 return response.json()
+            elif response.status_code == 401:
+                # Token expired - refresh and retry once
+                print(f"[!] Received 401 Unauthorized, refreshing token...")
+                if self.auth.refresh_auth_token():
+                    retry_response = requests.get(
+                        url,
+                        headers=self.auth.get_headers(),
+                        params=params,
+                        verify=False,
+                        timeout=30
+                    )
+                    if retry_response.status_code == 200:
+                        return retry_response.json()
+                    else:
+                        print(f"[✗] Retry after token refresh failed: {retry_response.status_code}")
+                        return None
+                else:
+                    print(f"[✗] Token refresh failed, cannot continue request.")
+                    return None
             elif response.status_code == 429:
                 # Rate limiting - wait and retry
                 print(f"[!] Rate limited, waiting 60 seconds...")
@@ -489,9 +572,11 @@ class FMCPolicyExtractor:
         return ', '.join(values) if values else 'any'
     
     @staticmethod
-    def resolve_object_names(objects: List[Dict]) -> str:
+    def resolve_object_names(objects: List) -> str:
         """
-        Extract names from object references
+        Extract names from object references.
+        Gracefully skips non-dict items (e.g. bool values returned by FMC
+        for certain NAT fields like interfaceInTranslatedNetwork).
         
         Args:
             objects: List of object dictionaries with 'name' keys
@@ -502,8 +587,13 @@ class FMCPolicyExtractor:
         if not objects:
             return 'any'
         
-        names = [obj.get('name', 'unknown') for obj in objects]
-        return ', '.join(names)
+        names = []
+        for obj in objects:
+            if isinstance(obj, dict):
+                names.append(obj.get('name', 'unknown'))
+            # Skip non-dict values (bool, str, None, etc.)
+        
+        return ', '.join(names) if names else 'any'
     
     @staticmethod
     def resolve_port_objects(ports: List[Dict]) -> str:
@@ -827,29 +917,64 @@ class CSVExporter:
         except IOError as e:
             print(f"[✗] Error writing CSV file: {e}")
     
+    @staticmethod
+    def _safe_get_dict(value: Any) -> Dict:
+        """Safely return a dict, or empty dict if value is not a dict (e.g. bool)."""
+        return value if isinstance(value, dict) else {}
+
     def _extract_nat_rule_data(self, policy_name: str, rule: Dict) -> Dict[str, str]:
         """Extract NAT rule data for CSV"""
-        orig_src = FMCPolicyExtractor.resolve_object_names(rule.get('originalSource', {}).get('objects', []))
-        orig_dst = FMCPolicyExtractor.resolve_object_names(rule.get('originalDestination', {}).get('objects', []))
-        trans_src = FMCPolicyExtractor.resolve_object_names(rule.get('translatedSource', {}).get('objects', []))
-        trans_dst = FMCPolicyExtractor.resolve_object_names(rule.get('translatedDestination', {}).get('objects', []))
-        
+        orig_src_field = self._safe_get_dict(rule.get('originalSource'))
+        orig_dst_field = self._safe_get_dict(rule.get('originalDestination'))
+        trans_src_field = self._safe_get_dict(rule.get('translatedSource'))
+        trans_dst_field = self._safe_get_dict(rule.get('translatedDestination'))
+
+        orig_src = FMCPolicyExtractor.resolve_object_names(orig_src_field.get('objects', []))
+        orig_dst = FMCPolicyExtractor.resolve_object_names(orig_dst_field.get('objects', []))
+        trans_src = FMCPolicyExtractor.resolve_object_names(trans_src_field.get('objects', []))
+        trans_dst = FMCPolicyExtractor.resolve_object_names(trans_dst_field.get('objects', []))
+
+        # interfaceInTranslatedNetwork / interfaceOutTranslatedNetwork can be
+        # a bool (true/false) instead of a dict, so handle both cases.
+        iface_in = rule.get('interfaceInTranslatedNetwork')
+        iface_out = rule.get('interfaceOutTranslatedNetwork')
+
+        if isinstance(iface_in, dict):
+            iface_in_str = iface_in.get('name', 'unknown')
+        elif isinstance(iface_in, bool):
+            iface_in_str = 'Interface' if iface_in else 'any'
+        else:
+            iface_in_str = 'any'
+
+        if isinstance(iface_out, dict):
+            iface_out_str = iface_out.get('name', 'unknown')
+        elif isinstance(iface_out, bool):
+            iface_out_str = 'Interface' if iface_out else 'any'
+        else:
+            iface_out_str = 'any'
+
+        # Safely extract port fields (can also be non-dict)
+        orig_src_port = self._safe_get_dict(rule.get('originalSourcePort'))
+        orig_dst_port = self._safe_get_dict(rule.get('originalDestinationPort'))
+        trans_src_port = self._safe_get_dict(rule.get('translatedSourcePort'))
+        trans_dst_port = self._safe_get_dict(rule.get('translatedDestinationPort'))
+
         return {
             'Policy': policy_name,
             'Rule ID': rule.get('metadata', {}).get('index', ''),
             'Rule Name': rule.get('name', ''),
             'Enabled': 'Yes' if rule.get('enabled', True) else 'No',
             'NAT Type': rule.get('natType', ''),
-            'Interface In': FMCPolicyExtractor.resolve_object_names([rule.get('interfaceInTranslatedNetwork', {})]),
-            'Interface Out': FMCPolicyExtractor.resolve_object_names([rule.get('interfaceOutTranslatedNetwork', {})]),
+            'Interface In': iface_in_str,
+            'Interface Out': iface_out_str,
             'Original Source': orig_src,
             'Original Destination': orig_dst,
-            'Original Source Port': rule.get('originalSourcePort', {}).get('port', ''),
-            'Original Destination Port': rule.get('originalDestinationPort', {}).get('port', ''),
+            'Original Source Port': orig_src_port.get('port', ''),
+            'Original Destination Port': orig_dst_port.get('port', ''),
             'Translated Source': trans_src,
             'Translated Destination': trans_dst,
-            'Translated Source Port': rule.get('translatedSourcePort', {}).get('port', ''),
-            'Translated Destination Port': rule.get('translatedDestinationPort', {}).get('port', ''),
+            'Translated Source Port': trans_src_port.get('port', ''),
+            'Translated Destination Port': trans_dst_port.get('port', ''),
             'Comment': rule.get('description', '')
         }
     
