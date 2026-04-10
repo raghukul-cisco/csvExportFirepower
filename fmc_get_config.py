@@ -387,7 +387,9 @@ class FMCPolicyExtractor:
     
     def get_nat_rules(self, policy_id: str) -> List[Dict]:
         """
-        Get all NAT rules for a specific policy
+        Get all NAT rules for a specific policy.
+        Fetches detailed information for each rule individually, since the
+        paginated listing often omits object names/details.
         
         Args:
             policy_id: UUID of the NAT policy
@@ -399,7 +401,36 @@ class FMCPolicyExtractor:
         endpoint = f'policy/ftdnatpolicies/{policy_id}/natrules'
         rules = self._paginate_results(endpoint)
         print(f"[✓] Found {len(rules)} NAT rules")
-        return rules
+
+        # Fetch detailed information for each rule using the type-specific endpoint
+        detailed_rules = []
+        for idx, rule in enumerate(rules, 1):
+            rule_id = rule.get('id')
+            rule_type = rule.get('type', '')
+            rule_name = rule.get('name', 'unnamed')
+            print(f"[*] Fetching details for NAT rule {idx}/{len(rules)}: {rule_name} ({rule_type})")
+
+            # Use the correct type-specific endpoint for full details
+            if rule_type == 'FTDAutoNatRule':
+                detail_endpoint = f'policy/ftdnatpolicies/{policy_id}/autonatrules/{rule_id}'
+            elif rule_type == 'FTDManualNatRule':
+                detail_endpoint = f'policy/ftdnatpolicies/{policy_id}/manualnatrules/{rule_id}'
+            else:
+                # Fallback: try the generic natrules endpoint
+                detail_endpoint = f'policy/ftdnatpolicies/{policy_id}/natrules/{rule_id}'
+
+            detailed_rule = self._make_request(detail_endpoint)
+
+            if detailed_rule:
+                detailed_rules.append(detailed_rule)
+            else:
+                # Fallback to basic rule info if detail fetch fails
+                detailed_rules.append(rule)
+
+            # Small delay to avoid overwhelming the API
+            time.sleep(0.5)
+
+        return detailed_rules
     
     def get_prefilter_rules(self, policy_id: str) -> List[Dict]:
         """
@@ -848,17 +879,23 @@ class CSVExporter:
         """Export NAT rules to CSV"""
         print(f"\n[*] Exporting {len(rules)} NAT rules to CSV: {self.output_file}")
         
-        fieldnames = ['Policy', 'Rule ID', 'Rule Name', 'Enabled', 'NAT Type',
-                     'Interface In', 'Interface Out', 'Original Source', 'Original Destination',
-                     'Original Source Port', 'Original Destination Port', 'Translated Source',
-                     'Translated Destination', 'Translated Source Port', 'Translated Destination Port',
-                     'Comment']
+        fieldnames = ['Policy', 'Rule ID', 'Rule Name', 'Rule Type', 'Section', 'Enabled',
+                     'NAT Type', 'Source Interface', 'Destination Interface',
+                     'Original Source', 'Original Destination',
+                     'Original Source Port', 'Original Destination Port',
+                     'Translated Source', 'Translated Destination',
+                     'Translated Source Port', 'Translated Destination Port',
+                     'Unidirectional', 'No Proxy ARP', 'DNS', 'Route Lookup',
+                     'Interface in Translated Source', 'Interface in Original Destination',
+                     'Net to Net', 'Comment']
         
         try:
             with open(self.output_file, 'w', newline='', encoding='utf-8') as csvfile:
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 writer.writeheader()
-                for rule in rules:
+                for idx, rule in enumerate(rules, 1):
+                    if idx % 10 == 0:
+                        print(f"[*] Processing NAT rule {idx}/{len(rules)} for CSV export...")
                     writer.writerow(self._extract_nat_rule_data(policy_name, rule))
             print(f"[✓] CSV export complete: {self.output_file}")
         except IOError as e:
@@ -918,63 +955,158 @@ class CSVExporter:
             print(f"[✗] Error writing CSV file: {e}")
     
     @staticmethod
-    def _safe_get_dict(value: Any) -> Dict:
-        """Safely return a dict, or empty dict if value is not a dict (e.g. bool)."""
-        return value if isinstance(value, dict) else {}
+    def _resolve_nat_object(value) -> str:
+        """
+        Resolve a NAT object reference to a display string.
+        NAT rule fields (originalSource, translatedNetwork, etc.) are direct
+        object references like {"type": "Network", "id": "...", "name": "..."},
+        NOT wrapped in {"objects": [...]} arrays like access rules.
+        They can also be bool, None, or other non-dict types.
+
+        Args:
+            value: The field value from the NAT rule
+
+        Returns:
+            Object name string, or 'any' if not present
+        """
+        if isinstance(value, dict):
+            # Direct object reference: try name first, then value, then type+id
+            name = value.get('name', '')
+            if name:
+                return name
+            val = value.get('value', '')
+            if val:
+                return val
+            obj_id = value.get('id', '')
+            obj_type = value.get('type', '')
+            if obj_type and obj_id:
+                return f"{obj_type}:{obj_id}"
+            return 'unknown'
+        elif isinstance(value, bool):
+            return 'Interface' if value else ''
+        elif isinstance(value, str) and value:
+            return value
+        return ''
+
+    @staticmethod
+    def _resolve_nat_port(value) -> str:
+        """
+        Resolve a NAT port object reference to a display string.
+        Port fields are direct object references like
+        {"type": "ProtocolPortObject", "name": "HTTP", "id": "..."}.
+        For Auto NAT, it may just be a port number string.
+
+        Args:
+            value: The port field value from the NAT rule
+
+        Returns:
+            Port display string or empty string
+        """
+        if isinstance(value, dict):
+            name = value.get('name', '')
+            if name:
+                return name
+            protocol = value.get('protocol', '')
+            port = value.get('port', '')
+            if protocol and port:
+                return f"{protocol}/{port}"
+            if port:
+                return str(port)
+            return value.get('value', '')
+        elif isinstance(value, (int, float)):
+            return str(int(value))
+        elif isinstance(value, str) and value:
+            return value
+        return ''
 
     def _extract_nat_rule_data(self, policy_name: str, rule: Dict) -> Dict[str, str]:
-        """Extract NAT rule data for CSV"""
-        orig_src_field = self._safe_get_dict(rule.get('originalSource'))
-        orig_dst_field = self._safe_get_dict(rule.get('originalDestination'))
-        trans_src_field = self._safe_get_dict(rule.get('translatedSource'))
-        trans_dst_field = self._safe_get_dict(rule.get('translatedDestination'))
+        """
+        Extract NAT rule data for CSV.
+        Handles both FTDAutoNatRule and FTDManualNatRule structures:
 
-        orig_src = FMCPolicyExtractor.resolve_object_names(orig_src_field.get('objects', []))
-        orig_dst = FMCPolicyExtractor.resolve_object_names(orig_dst_field.get('objects', []))
-        trans_src = FMCPolicyExtractor.resolve_object_names(trans_src_field.get('objects', []))
-        trans_dst = FMCPolicyExtractor.resolve_object_names(trans_dst_field.get('objects', []))
+        FTDAutoNatRule fields:
+          - originalNetwork (direct object ref)
+          - translatedNetwork (direct object ref)
+          - originalPort, translatedPort (direct port ref or value)
+          - sourceInterface, destinationInterface (SecurityZone refs)
+          - interfaceInTranslatedNetwork (bool)
 
-        # interfaceInTranslatedNetwork / interfaceOutTranslatedNetwork can be
-        # a bool (true/false) instead of a dict, so handle both cases.
-        iface_in = rule.get('interfaceInTranslatedNetwork')
-        iface_out = rule.get('interfaceOutTranslatedNetwork')
+        FTDManualNatRule fields:
+          - originalSource, originalDestination (direct object refs)
+          - translatedSource, translatedDestination (direct object refs)
+          - originalSourcePort, originalDestinationPort (direct port refs)
+          - translatedSourcePort, translatedDestinationPort (direct port refs)
+          - sourceInterface, destinationInterface (SecurityZone refs)
+          - interfaceInTranslatedSource (bool)
+          - interfaceInOriginalDestination (bool)
+        """
+        rule_type = rule.get('type', '')
+        section = rule.get('section', '')
 
-        if isinstance(iface_in, dict):
-            iface_in_str = iface_in.get('name', 'unknown')
-        elif isinstance(iface_in, bool):
-            iface_in_str = 'Interface' if iface_in else 'any'
+        # Source / Destination interfaces (SecurityZone objects, same for both types)
+        src_iface = self._resolve_nat_object(rule.get('sourceInterface'))
+        dst_iface = self._resolve_nat_object(rule.get('destinationInterface'))
+
+        if rule_type == 'FTDAutoNatRule':
+            # Auto NAT: originalNetwork -> Original Source, translatedNetwork -> Translated Source
+            orig_src = self._resolve_nat_object(rule.get('originalNetwork'))
+            orig_dst = ''  # Auto NAT does not have a separate original destination
+            trans_src = self._resolve_nat_object(rule.get('translatedNetwork'))
+            trans_dst = ''  # Auto NAT does not have a separate translated destination
+            orig_src_port = self._resolve_nat_port(rule.get('originalPort'))
+            orig_dst_port = ''
+            trans_src_port = self._resolve_nat_port(rule.get('translatedPort'))
+            trans_dst_port = ''
+
+            # Interface flags for Auto NAT
+            iface_in_translated = rule.get('interfaceInTranslatedNetwork', False)
+            iface_in_orig_dst = False
         else:
-            iface_in_str = 'any'
+            # Manual NAT: separate source/destination fields
+            orig_src = self._resolve_nat_object(rule.get('originalSource'))
+            orig_dst = self._resolve_nat_object(rule.get('originalDestination'))
+            trans_src = self._resolve_nat_object(rule.get('translatedSource'))
+            trans_dst = self._resolve_nat_object(rule.get('translatedDestination'))
+            orig_src_port = self._resolve_nat_port(rule.get('originalSourcePort'))
+            orig_dst_port = self._resolve_nat_port(rule.get('originalDestinationPort'))
+            trans_src_port = self._resolve_nat_port(rule.get('translatedSourcePort'))
+            trans_dst_port = self._resolve_nat_port(rule.get('translatedDestinationPort'))
 
-        if isinstance(iface_out, dict):
-            iface_out_str = iface_out.get('name', 'unknown')
-        elif isinstance(iface_out, bool):
-            iface_out_str = 'Interface' if iface_out else 'any'
-        else:
-            iface_out_str = 'any'
+            # Interface flags for Manual NAT
+            iface_in_translated = rule.get('interfaceInTranslatedSource', False)
+            iface_in_orig_dst = rule.get('interfaceInOriginalDestination', False)
 
-        # Safely extract port fields (can also be non-dict)
-        orig_src_port = self._safe_get_dict(rule.get('originalSourcePort'))
-        orig_dst_port = self._safe_get_dict(rule.get('originalDestinationPort'))
-        trans_src_port = self._safe_get_dict(rule.get('translatedSourcePort'))
-        trans_dst_port = self._safe_get_dict(rule.get('translatedDestinationPort'))
+        # Format boolean flags
+        def bool_str(val):
+            if isinstance(val, bool):
+                return 'Yes' if val else 'No'
+            return ''
 
         return {
             'Policy': policy_name,
             'Rule ID': rule.get('metadata', {}).get('index', ''),
             'Rule Name': rule.get('name', ''),
+            'Rule Type': 'Auto NAT' if rule_type == 'FTDAutoNatRule' else 'Manual NAT',
+            'Section': section,
             'Enabled': 'Yes' if rule.get('enabled', True) else 'No',
             'NAT Type': rule.get('natType', ''),
-            'Interface In': iface_in_str,
-            'Interface Out': iface_out_str,
-            'Original Source': orig_src,
-            'Original Destination': orig_dst,
-            'Original Source Port': orig_src_port.get('port', ''),
-            'Original Destination Port': orig_dst_port.get('port', ''),
-            'Translated Source': trans_src,
-            'Translated Destination': trans_dst,
-            'Translated Source Port': trans_src_port.get('port', ''),
-            'Translated Destination Port': trans_dst_port.get('port', ''),
+            'Source Interface': src_iface or 'any',
+            'Destination Interface': dst_iface or 'any',
+            'Original Source': orig_src or 'any',
+            'Original Destination': orig_dst or 'any',
+            'Original Source Port': orig_src_port,
+            'Original Destination Port': orig_dst_port,
+            'Translated Source': trans_src or 'any',
+            'Translated Destination': trans_dst or 'any',
+            'Translated Source Port': trans_src_port,
+            'Translated Destination Port': trans_dst_port,
+            'Unidirectional': bool_str(rule.get('unidirectional', False)),
+            'No Proxy ARP': bool_str(rule.get('noProxyArp', False)),
+            'DNS': bool_str(rule.get('dns', False)),
+            'Route Lookup': bool_str(rule.get('routeLookup', False)),
+            'Interface in Translated Source': bool_str(iface_in_translated),
+            'Interface in Original Destination': bool_str(iface_in_orig_dst),
+            'Net to Net': bool_str(rule.get('netToNet', False)),
             'Comment': rule.get('description', '')
         }
     
