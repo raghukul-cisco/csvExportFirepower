@@ -202,7 +202,7 @@ The generated CSV format varies by policy type:
 Policy, Rule ID, Rule Name, Enabled, Action, Source Zones, Source Networks, Source Ports, Destination Zones, Destination Networks, Destination Ports, Protocol, Applications, URLs, Users, IPS Policy, File Policy, Variable Set, Logging, Send Events To, Log Files, Log Connections, Comment, Section, Category
 
 ### NAT Policy Columns
-Policy, Rule ID, Rule Name, Enabled, NAT Type, Interface In, Interface Out, Original Source, Original Destination, Original Source Port, Original Destination Port, Translated Source, Translated Destination, Translated Source Port, Translated Destination Port, Comment
+Policy, Rule ID, Rule Name, Rule Type, Section, Enabled, NAT Type, Source Interface, Destination Interface, Original Source, **Original Source (IP)**, Original Destination, **Original Destination (IP)**, Original Source Port, **Original Source Port (Value)**, Original Destination Port, **Original Destination Port (Value)**, Translated Source, **Translated Source (IP)**, Translated Destination, **Translated Destination (IP)**, Translated Source Port, **Translated Source Port (Value)**, Translated Destination Port, **Translated Destination Port (Value)**, Unidirectional, No Proxy ARP, DNS, Route Lookup, Interface in Translated Source, Interface in Original Destination, Net to Net, Comment
 
 ### Prefilter Policy Columns
 Policy, Rule ID, Rule Name, Enabled, Action, Source Zones, Source Networks, Source Ports, Destination Zones, Destination Networks, Destination Ports, Protocol, VLAN Tags, Logging, Comment
@@ -266,6 +266,46 @@ Check your FMC version:
 curl -k -X POST https://<FMC-IP>/api/fmc_platform/v1/auth/generatetoken \
   -u username:password -I | grep "X-auth-access-token"
 ```
+
+## Recent Updates
+
+### NAT Policy — Object Value Resolution (April 2026)
+
+NAT policy CSV exports now include **resolved IP addresses and port values** alongside object names. When exporting NAT rules, the script makes API calls to look up each referenced network and port object, adding the actual IP/CIDR/range or protocol/port value in dedicated columns.
+
+#### New CSV Columns for NAT Policies
+
+Each network and port field now has a companion resolved-value column:
+
+| Object Name Column | Resolved Value Column |
+|---|---|
+| Original Source | Original Source (IP) |
+| Original Destination | Original Destination (IP) |
+| Translated Source | Translated Source (IP) |
+| Translated Destination | Translated Destination (IP) |
+| Original Source Port | Original Source Port (Value) |
+| Original Destination Port | Original Destination Port (Value) |
+| Translated Source Port | Translated Source Port (Value) |
+| Translated Destination Port | Translated Destination Port (Value) |
+
+#### How Resolution Works
+
+- **Host / Network / Range / FQDN** objects → resolved to their IP, CIDR, range, or FQDN value (e.g. `10.1.1.0/24`, `192.168.1.1`)
+- **NetworkGroup** objects → all members recursively resolved and listed
+- **ProtocolPortObject** → resolved to `protocol/port` format (e.g. `TCP/443`, `UDP/53`)
+- **PortObjectGroup** → all member ports recursively resolved
+- Results are cached per session so each object is fetched from the API only once
+- Works for both **Auto NAT** and **Manual NAT** rule types
+
+#### Example Output
+
+```
+Original Source,Original Source (IP),Translated Source,Translated Source (IP),Original Destination Port,Original Destination Port (Value)
+WebServer-Host,10.1.2.50,NAT-Pool-Web,10.1.2.100,HTTP,TCP/80
+DB-Network,10.10.0.0/24,NAT-DB,10.10.1.0/24,,
+```
+
+> **Note:** Object resolution requires additional API calls (one per unique object). For policies with many objects, export may take a few extra minutes. A progress indicator is shown during processing.
 
 ## Security Notes
 
