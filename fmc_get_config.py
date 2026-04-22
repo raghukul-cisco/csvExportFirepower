@@ -875,16 +875,22 @@ class CSVExporter:
             'Category': category
         }
     
-    def export_nat_rules(self, policy_name: str, rules: List[Dict]) -> None:
+    def export_nat_rules(self, policy_name: str, rules: List[Dict], extractor: Optional['FMCPolicyExtractor'] = None) -> None:
         """Export NAT rules to CSV"""
         print(f"\n[*] Exporting {len(rules)} NAT rules to CSV: {self.output_file}")
+        if extractor:
+            print(f"[*] Object value resolution enabled - this may take a few minutes...")
         
         fieldnames = ['Policy', 'Rule ID', 'Rule Name', 'Rule Type', 'Section', 'Enabled',
                      'NAT Type', 'Source Interface', 'Destination Interface',
-                     'Original Source', 'Original Destination',
-                     'Original Source Port', 'Original Destination Port',
-                     'Translated Source', 'Translated Destination',
-                     'Translated Source Port', 'Translated Destination Port',
+                     'Original Source', 'Original Source (IP)',
+                     'Original Destination', 'Original Destination (IP)',
+                     'Original Source Port', 'Original Source Port (Value)',
+                     'Original Destination Port', 'Original Destination Port (Value)',
+                     'Translated Source', 'Translated Source (IP)',
+                     'Translated Destination', 'Translated Destination (IP)',
+                     'Translated Source Port', 'Translated Source Port (Value)',
+                     'Translated Destination Port', 'Translated Destination Port (Value)',
                      'Unidirectional', 'No Proxy ARP', 'DNS', 'Route Lookup',
                      'Interface in Translated Source', 'Interface in Original Destination',
                      'Net to Net', 'Comment']
@@ -896,7 +902,7 @@ class CSVExporter:
                 for idx, rule in enumerate(rules, 1):
                     if idx % 10 == 0:
                         print(f"[*] Processing NAT rule {idx}/{len(rules)} for CSV export...")
-                    writer.writerow(self._extract_nat_rule_data(policy_name, rule))
+                    writer.writerow(self._extract_nat_rule_data(policy_name, rule, extractor))
             print(f"[✓] CSV export complete: {self.output_file}")
         except IOError as e:
             print(f"[✗] Error writing CSV file: {e}")
@@ -1019,7 +1025,68 @@ class CSVExporter:
             return value
         return ''
 
-    def _extract_nat_rule_data(self, policy_name: str, rule: Dict) -> Dict[str, str]:
+    @staticmethod
+    def _resolve_nat_object_ip(value, extractor: Optional['FMCPolicyExtractor'] = None) -> str:
+        """
+        Resolve a NAT network object reference to its IP address/value via API lookup.
+        
+        Args:
+            value: The field value from the NAT rule (dict object ref, bool, etc.)
+            extractor: FMCPolicyExtractor instance for API lookups
+            
+        Returns:
+            Resolved IP/CIDR string, or empty string if not resolvable
+        """
+        if not extractor or not isinstance(value, dict):
+            return ''
+        obj_id = value.get('id')
+        obj_type = value.get('type')
+        if not obj_id or not obj_type:
+            return ''
+        details = extractor.get_object_details(value)
+        if not details:
+            return ''
+        det_type = details.get('type', '')
+        if det_type in ('Host', 'Network', 'Range', 'FQDN'):
+            return details.get('value', '')
+        elif det_type == 'NetworkGroup':
+            group_objects = details.get('objects', [])
+            group_literals = details.get('literals', [])
+            return extractor.resolve_object_values(group_objects, group_literals)
+        return details.get('value', details.get('name', ''))
+
+    @staticmethod
+    def _resolve_nat_port_value(value, extractor: Optional['FMCPolicyExtractor'] = None) -> str:
+        """
+        Resolve a NAT port object reference to its protocol/port value via API lookup.
+        
+        Args:
+            value: The port field value from the NAT rule
+            extractor: FMCPolicyExtractor instance for API lookups
+            
+        Returns:
+            Resolved protocol/port string, or empty string if not resolvable
+        """
+        if not extractor or not isinstance(value, dict):
+            return ''
+        obj_id = value.get('id')
+        obj_type = value.get('type')
+        if not obj_id or not obj_type:
+            return ''
+        details = extractor.get_object_details(value)
+        if not details:
+            return ''
+        det_type = details.get('type', '')
+        if det_type == 'ProtocolPortObject':
+            protocol = details.get('protocol', '')
+            port = details.get('port', '')
+            return f"{protocol}/{port}" if protocol and port else details.get('name', '')
+        elif det_type == 'PortObjectGroup':
+            group_objects = details.get('objects', [])
+            return extractor.resolve_object_values(group_objects)
+        return details.get('value', details.get('name', ''))
+
+    def _extract_nat_rule_data(self, policy_name: str, rule: Dict, extractor: Optional['FMCPolicyExtractor'] = None) -> Dict[str, str]:
         """
         Extract NAT rule data for CSV.
         Handles both FTDAutoNatRule and FTDManualNatRule structures:
@@ -1058,6 +1125,17 @@ class CSVExporter:
             trans_src_port = self._resolve_nat_port(rule.get('translatedPort'))
             trans_dst_port = ''
 
+            # Resolved IP values
+            orig_src_ip = self._resolve_nat_object_ip(rule.get('originalNetwork'), extractor)
+            orig_dst_ip = ''
+            trans_src_ip = self._resolve_nat_object_ip(rule.get('translatedNetwork'), extractor)
+            trans_dst_ip = ''
+            # Resolved port values
+            orig_src_port_val = self._resolve_nat_port_value(rule.get('originalPort'), extractor)
+            orig_dst_port_val = ''
+            trans_src_port_val = self._resolve_nat_port_value(rule.get('translatedPort'), extractor)
+            trans_dst_port_val = ''
+
             # Interface flags for Auto NAT
             iface_in_translated = rule.get('interfaceInTranslatedNetwork', False)
             iface_in_orig_dst = False
@@ -1071,6 +1149,17 @@ class CSVExporter:
             orig_dst_port = self._resolve_nat_port(rule.get('originalDestinationPort'))
             trans_src_port = self._resolve_nat_port(rule.get('translatedSourcePort'))
             trans_dst_port = self._resolve_nat_port(rule.get('translatedDestinationPort'))
+
+            # Resolved IP values
+            orig_src_ip = self._resolve_nat_object_ip(rule.get('originalSource'), extractor)
+            orig_dst_ip = self._resolve_nat_object_ip(rule.get('originalDestination'), extractor)
+            trans_src_ip = self._resolve_nat_object_ip(rule.get('translatedSource'), extractor)
+            trans_dst_ip = self._resolve_nat_object_ip(rule.get('translatedDestination'), extractor)
+            # Resolved port values
+            orig_src_port_val = self._resolve_nat_port_value(rule.get('originalSourcePort'), extractor)
+            orig_dst_port_val = self._resolve_nat_port_value(rule.get('originalDestinationPort'), extractor)
+            trans_src_port_val = self._resolve_nat_port_value(rule.get('translatedSourcePort'), extractor)
+            trans_dst_port_val = self._resolve_nat_port_value(rule.get('translatedDestinationPort'), extractor)
 
             # Interface flags for Manual NAT
             iface_in_translated = rule.get('interfaceInTranslatedSource', False)
@@ -1093,13 +1182,21 @@ class CSVExporter:
             'Source Interface': src_iface or 'any',
             'Destination Interface': dst_iface or 'any',
             'Original Source': orig_src or 'any',
+            'Original Source (IP)': orig_src_ip,
             'Original Destination': orig_dst or 'any',
+            'Original Destination (IP)': orig_dst_ip,
             'Original Source Port': orig_src_port,
+            'Original Source Port (Value)': orig_src_port_val,
             'Original Destination Port': orig_dst_port,
+            'Original Destination Port (Value)': orig_dst_port_val,
             'Translated Source': trans_src or 'any',
+            'Translated Source (IP)': trans_src_ip,
             'Translated Destination': trans_dst or 'any',
+            'Translated Destination (IP)': trans_dst_ip,
             'Translated Source Port': trans_src_port,
+            'Translated Source Port (Value)': trans_src_port_val,
             'Translated Destination Port': trans_dst_port,
+            'Translated Destination Port (Value)': trans_dst_port_val,
             'Unidirectional': bool_str(rule.get('unidirectional', False)),
             'No Proxy ARP': bool_str(rule.get('noProxyArp', False)),
             'DNS': bool_str(rule.get('dns', False)),
@@ -1320,7 +1417,7 @@ def main():
     if policy_type == 'access':
         exporter.export_access_rules(policy_name, rules, extractor)
     elif policy_type == 'nat':
-        exporter.export_nat_rules(policy_name, rules)
+        exporter.export_nat_rules(policy_name, rules, extractor)
     elif policy_type == 'prefilter':
         exporter.export_prefilter_rules(policy_name, rules)
     elif policy_type == 'ssl':
