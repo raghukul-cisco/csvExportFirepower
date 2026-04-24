@@ -199,7 +199,7 @@ class FMCPolicyExtractor:
         'access': {'name': 'Access Control Policies', 'endpoint': 'policy/accesspolicies'},
         'nat': {'name': 'NAT Policies', 'endpoint': 'policy/ftdnatpolicies'},
         'prefilter': {'name': 'Prefilter Policies', 'endpoint': 'policy/prefilterpolicies'},
-        'ssl': {'name': 'SSL Policies', 'endpoint': 'policy/sslpolicies'},
+        'ssl': {'name': 'SSL/Decryption Policies', 'endpoint': 'policy/decryptionpolicies', 'fallback_endpoint': 'policy/sslpolicies'},
         'dns': {'name': 'DNS Policies', 'endpoint': 'policy/dnspolicies'}
     }
     
@@ -342,6 +342,13 @@ class FMCPolicyExtractor:
         
         print(f"\n[*] Fetching {policy_name}...")
         policies = self._paginate_results(endpoint)
+        
+        # If primary endpoint returned nothing and a fallback exists, try it
+        if not policies and 'fallback_endpoint' in self.POLICY_TYPES[policy_type]:
+            fallback = self.POLICY_TYPES[policy_type]['fallback_endpoint']
+            print(f"[*] Trying fallback endpoint: {fallback}...")
+            policies = self._paginate_results(fallback)
+        
         print(f"[✓] Found {len(policies)} {policy_name.lower()}")
         return policies
     
@@ -450,18 +457,31 @@ class FMCPolicyExtractor:
     
     def get_ssl_rules(self, policy_id: str) -> List[Dict]:
         """
-        Get all SSL rules for a specific policy
+        Get all SSL/Decryption rules for a specific policy.
         
         Args:
-            policy_id: UUID of the SSL policy
+            policy_id: UUID of the SSL/Decryption policy
             
         Returns:
-            List of SSL rule objects
+            List of SSL/Decryption rule objects
         """
-        print(f"\n[*] Fetching SSL rules for policy ID: {policy_id}")
-        endpoint = f'policy/sslpolicies/{policy_id}/sslrules'
-        rules = self._paginate_results(endpoint)
-        print(f"[✓] Found {len(rules)} SSL rules")
+        print(f"\n[*] Fetching SSL/Decryption rules for policy ID: {policy_id}")
+        
+        # FMC 10.0+: endpoint is decryptionpolicyrules
+        # FMC 7.x:   endpoint may be decryptionrules or sslrules
+        # FMC <7.0:  endpoint is sslrules under sslpolicies
+        endpoints = [
+            f'policy/decryptionpolicies/{policy_id}/decryptionpolicyrules',
+            f'policy/decryptionpolicies/{policy_id}/decryptionrules',
+            f'policy/sslpolicies/{policy_id}/sslrules',
+        ]
+        rules = []
+        for endpoint in endpoints:
+            rules = self._paginate_results(endpoint)
+            if rules:
+                break
+        
+        print(f"[✓] Found {len(rules)} SSL/Decryption rules")
         return rules
     
     def get_dns_rules(self, policy_id: str) -> List[Dict]:

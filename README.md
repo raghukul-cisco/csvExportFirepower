@@ -220,18 +220,21 @@ Policy, Rule ID, Rule Name, Enabled, Action, Source Zones, Source Networks, DNS 
 - `/api/fmc_platform/v1/info/domain` - List available domains
 
 ### Policy Discovery
-- `/api/fmc_platform/v1/domain/{uuid}/policy/accesspolicies` - Access Control Policies
-- `/api/fmc_platform/v1/domain/{uuid}/policy/ftdnatpolicies` - NAT Policies
-- `/api/fmc_platform/v1/domain/{uuid}/policy/prefilterpolicies` - Prefilter Policies
-- `/api/fmc_platform/v1/domain/{uuid}/policy/sslpolicies` - SSL Policies
-- `/api/fmc_platform/v1/domain/{uuid}/policy/dnspolicies` - DNS Policies
+- `/api/fmc_config/v1/domain/{uuid}/policy/accesspolicies` - Access Control Policies
+- `/api/fmc_config/v1/domain/{uuid}/policy/ftdnatpolicies` - NAT Policies
+- `/api/fmc_config/v1/domain/{uuid}/policy/prefilterpolicies` - Prefilter Policies
+- `/api/fmc_config/v1/domain/{uuid}/policy/decryptionpolicies` - SSL/Decryption Policies (FMC 7.0+)
+- `/api/fmc_config/v1/domain/{uuid}/policy/sslpolicies` - SSL Policies (FMC <7.0, fallback)
+- `/api/fmc_config/v1/domain/{uuid}/policy/dnspolicies` - DNS Policies
 
 ### Rule Extraction
-- `/api/fmc_platform/v1/domain/{uuid}/policy/accesspolicies/{id}/accessrules`
-- `/api/fmc_platform/v1/domain/{uuid}/policy/ftdnatpolicies/{id}/natrules`
-- `/api/fmc_platform/v1/domain/{uuid}/policy/prefilterpolicies/{id}/prefilterrules`
-- `/api/fmc_platform/v1/domain/{uuid}/policy/sslpolicies/{id}/sslrules`
-- `/api/fmc_platform/v1/domain/{uuid}/policy/dnspolicies/{id}/dnsrules`
+- `/api/fmc_config/v1/domain/{uuid}/policy/accesspolicies/{id}/accessrules`
+- `/api/fmc_config/v1/domain/{uuid}/policy/ftdnatpolicies/{id}/natrules`
+- `/api/fmc_config/v1/domain/{uuid}/policy/prefilterpolicies/{id}/prefilterrules`
+- `/api/fmc_config/v1/domain/{uuid}/policy/decryptionpolicies/{id}/decryptionpolicyrules` (FMC 10.0+)
+- `/api/fmc_config/v1/domain/{uuid}/policy/decryptionpolicies/{id}/decryptionrules` (FMC 7.x)
+- `/api/fmc_config/v1/domain/{uuid}/policy/sslpolicies/{id}/sslrules` (FMC <7.0)
+- `/api/fmc_config/v1/domain/{uuid}/policy/dnspolicies/{id}/dnsrules`
 
 ## Troubleshooting
 
@@ -268,6 +271,23 @@ curl -k -X POST https://<FMC-IP>/api/fmc_platform/v1/auth/generatetoken \
 ```
 
 ## Recent Updates
+
+### SSL/Decryption Policy — FMC v10.0 API Compatibility Fix (April 2026)
+
+Fixed SSL/Decryption policy and rules export failing with `404 Invalid URL` errors on FMC v10.0.
+
+**Root cause:** Cisco changed the API endpoint names across FMC versions:
+
+| FMC Version | Policy Endpoint | Rules Endpoint |
+|---|---|---|
+| < 7.0 | `policy/sslpolicies` | `policy/sslpolicies/{id}/sslrules` |
+| 7.0 – 7.x | `policy/decryptionpolicies` | `policy/decryptionpolicies/{id}/decryptionrules` |
+| **10.0+** | `policy/decryptionpolicies` | **`policy/decryptionpolicies/{id}/decryptionpolicyrules`** |
+
+**Changes made:**
+- Policy discovery now tries `decryptionpolicies` first with fallback to `sslpolicies` for older FMC versions
+- Rules endpoint now tries `decryptionpolicyrules` (v10.0+), `decryptionrules` (v7.x), and `sslrules` (pre-7.0) in order
+- Automatic version compatibility — no manual configuration needed
 
 ### NAT Policy — Object Value Resolution (April 2026)
 
