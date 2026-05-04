@@ -728,6 +728,8 @@ class CSVExporter:
             'Applications (Values)',
             'URLs',
             'URLs (Values)',
+            'Source SGTs',
+            'Destination SGTs',
             'Users',
             'IPS Policy',
             'File Policy',
@@ -822,9 +824,29 @@ class CSVExporter:
         url_names = FMCPolicyExtractor.resolve_object_names(urls)
         url_values = extractor.resolve_object_values(urls) if extractor else ''
         
+        # Source SGTs (Security Group Tags)
+        source_sgts = rule.get('sourceSecurityGroupTags', {}).get('objects', [])
+        source_sgt_names = FMCPolicyExtractor.resolve_object_names(source_sgts)
+        
+        # Destination SGTs (Security Group Tags)
+        dest_sgts = rule.get('destinationSecurityGroupTags', {}).get('objects', [])
+        dest_sgt_names = FMCPolicyExtractor.resolve_object_names(dest_sgts)
+        
         # Users
-        users = rule.get('users', {}).get('objects', [])
-        user_names = FMCPolicyExtractor.resolve_object_names(users)
+        users_data = rule.get('users', {})
+        users_objects = users_data.get('objects', [])
+        if users_objects:
+            user_parts = []
+            for u in users_objects:
+                name = u.get('name', '')
+                realm = u.get('realm', {}).get('name', '')
+                if realm:
+                    user_parts.append(f"{realm}\\{name}")
+                else:
+                    user_parts.append(name)
+            user_names = ', '.join(user_parts) if user_parts else 'any'
+        else:
+            user_names = 'any'
         
         # IPS Policy
         ips_policy = rule.get('ipsPolicy', {})
@@ -882,6 +904,8 @@ class CSVExporter:
             'Applications (Values)': app_values,
             'URLs': url_names,
             'URLs (Values)': url_values,
+            'Source SGTs': source_sgt_names,
+            'Destination SGTs': dest_sgt_names,
             'Users': user_names,
             'IPS Policy': ips_policy_name,
             'File Policy': file_policy_name,
